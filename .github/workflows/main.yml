@@ -24,46 +24,115 @@ jobs:
         with:
           flutter-version: '3.19.6'
 
-      - name: Update dependencies and Patch
+      - name: Patch Video Editor Code
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          file = Path("lib/main.dart")
+
+          if not file.exists():
+              raise SystemExit("ERROR: lib/main.dart not found")
+
+          code = file.read_text(encoding="utf-8")
+
+          old = "config.getFFmpegProgress(stats.getTime())"
+          new = "config.getFFmpegProgress(stats.getTime().toInt())"
+
+          if old in code:
+              code = code.replace(old, new)
+              file.write_text(code, encoding="utf-8")
+              print("Fixed double/int type mismatch.")
+          elif new in code:
+              print("Type mismatch fix already applied.")
+          else:
+              raise SystemExit(
+                  "ERROR: Expected FFmpeg progress code not found."
+              )
+          PY
+
+      - name: Update dependencies and Patch Android
         run: |
           cd example
-          # ترقية المكتبة للإصدار المتوفر على السيرفرات الرسمية
-          flutter pub add ffmpeg_kit_flutter_min:^6.0.3
+
           flutter pub get
 
-          # معالجة التوافق مع نظام أندرويد
-          python3 -c '
-          import os, re
-          
-          # رفع الحد الأدنى لنظام أندرويد ليتوافق مع محرك الفيديو
-          app_gradle = "android/app/build.gradle"
-          if os.path.exists(app_gradle):
-              with open(app_gradle, "r", encoding="utf-8") as f:
-                  c = f.read()
-              c = re.sub(r"minSdkVersion\s+\d+", "minSdkVersion 24", c)
-              c = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 24", c)
-              with open(app_gradle, "w", encoding="utf-8") as f:
-                  f.write(c)
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
 
-          # ضبط مساحات الأسماء للمكتبات القديمة
+          gradle = Path("android/app/build.gradle")
+
+          if gradle.exists():
+              content = gradle.read_text(encoding="utf-8")
+
+              content = re.sub(
+                  r"minSdkVersion\s+flutter\.minSdkVersion",
+                  "minSdkVersion 24",
+                  content
+              )
+
+              content = re.sub(
+                  r"minSdkVersion\s+\d+",
+                  "minSdkVersion 24",
+                  content
+              )
+
+              gradle.write_text(content, encoding="utf-8")
+
           pub_cache = os.path.expanduser("~/.pub-cache")
+
           for root, dirs, files in os.walk(pub_cache):
-              if "build.gradle" in files:
-                  path = os.path.join(root, "build.gradle")
+              if "build.gradle" not in files:
+                  continue
+
+              path = os.path.join(root, "build.gradle")
+
+              try:
                   with open(path, "r", encoding="utf-8") as f:
                       content = f.read()
-                  if "android {" in content and "namespace" not in content:
-                      pkg = "xyz.justsoft.video_thumbnail"
-                      mfile = os.path.join(root, "src", "main", "AndroidManifest.xml")
-                      if os.path.exists(mfile):
-                          with open(mfile, "r", encoding="utf-8") as mf:
-                              m = re.search(r"package=[\"\x27]([^\s\"\x27]+)[\"\x27]", mf.read())
-                              if m:
-                                  pkg = m.group(1)
-                      new_content = content.replace("android {", f"android {{\n    namespace \"{pkg}\"")
-                      with open(path, "w", encoding="utf-8") as f:
-                          f.write(new_content)
-          '
+
+                  if "android {" not in content:
+                      continue
+
+                  if re.search(r"^\s*namespace\s+", content, re.M):
+                      continue
+
+                  manifest = os.path.join(
+                      root, "src", "main", "AndroidManifest.xml"
+                  )
+
+                  if not os.path.exists(manifest):
+                      continue
+
+                  with open(manifest, "r", encoding="utf-8") as f:
+                      xml = f.read()
+
+                  match = re.search(
+                      r'package=["\']([^"\']+)["\']', xml
+                  )
+
+                  if not match:
+                      continue
+
+                  namespace = match.group(1)
+
+                  content = content.replace(
+                      "android {",
+                      'android {\n    namespace "' + namespace + '"',
+                      1
+                  )
+
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+
+                  print("Added namespace:", namespace)
+
+              except (OSError, UnicodeError) as error:
+                  print("Skipped:", path, error)
+          PY
+
           flutter build apk --debug
 
       - name: Upload APK Artifact
@@ -71,4 +140,4 @@ jobs:
         with:
           name: video-editor-apk
           path: example/build/app/outputs/flutter-apk/*.apk
-
+          if-no-files-found: error
