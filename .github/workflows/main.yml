@@ -24,115 +24,71 @@ jobs:
         with:
           flutter-version: '3.19.6'
 
-      - name: Patch Video Editor Code
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          file = Path("example/lib/main.dart")
-
-          if not file.exists():
-              raise SystemExit("ERROR: lib/main.dart not found")
-
-          code = file.read_text(encoding="utf-8")
-
-          old = "config.getFFmpegProgress(stats.getTime())"
-          new = "config.getFFmpegProgress(stats.getTime().toInt())"
-
-          if old in code:
-              code = code.replace(old, new)
-              file.write_text(code, encoding="utf-8")
-              print("Fixed double/int type mismatch.")
-          elif new in code:
-              print("Type mismatch fix already applied.")
-          else:
-              raise SystemExit(
-                  "ERROR: Expected FFmpeg progress code not found."
-              )
-          PY
-
-      - name: Update dependencies and Patch Android
+      - name: Patch and Build APK
         run: |
           cd example
-
           flutter pub get
 
-          python3 - <<'PY'
-          import os
-          import re
-          from pathlib import Path
+          python3 -c '
+          import os, re
 
-          gradle = Path("android/app/build.gradle")
+          # 1. ضبط إعدادات أندرويد
+          app_gradle = "android/app/build.gradle"
+          if os.path.exists(app_gradle):
+              with open(app_gradle, "r", encoding="utf-8") as f:
+                  c = f.read()
+              c = re.sub(r"minSdkVersion\s+\d+", "minSdkVersion 24", c)
+              c = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 24", c)
+              with open(app_gradle, "w", encoding="utf-8") as f:
+                  f.write(c)
 
-          if gradle.exists():
-              content = gradle.read_text(encoding="utf-8")
+          # 2. توجيه Gradle لتحميل نسخة 5.1.LTS الرسمية
+          root_gradle = "android/build.gradle"
+          if os.path.exists(root_gradle):
+              with open(root_gradle, "r", encoding="utf-8") as f:
+                  rg = f.read()
+              patch_str = """
+          allprojects {
+              configurations.all {
+                  resolutionStrategy.eachDependency { details ->
+                      if (details.requested.group == "com.arthenica" && details.requested.version == "5.1") {
+                          details.useVersion "5.1.LTS"
+                      }
+                  }
+              }
+          }
+          """
+              if "resolutionStrategy" not in rg:
+                  with open(root_gradle, "a", encoding="utf-8") as f:
+                      f.write(patch_str)
 
-              content = re.sub(
-                  r"minSdkVersion\s+flutter\.minSdkVersion",
-                  "minSdkVersion 24",
-                  content
-              )
-
-              content = re.sub(
-                  r"minSdkVersion\s+\d+",
-                  "minSdkVersion 24",
-                  content
-              )
-
-              gradle.write_text(content, encoding="utf-8")
-
+          # 3. تعديل ملفات المكتبات في الذاكرة المؤقتة
           pub_cache = os.path.expanduser("~/.pub-cache")
-
           for root, dirs, files in os.walk(pub_cache):
-              if "build.gradle" not in files:
-                  continue
-
-              path = os.path.join(root, "build.gradle")
-
-              try:
+              if "build.gradle" in files:
+                  path = os.path.join(root, "build.gradle")
                   with open(path, "r", encoding="utf-8") as f:
                       content = f.read()
-
-                  if "android {" not in content:
-                      continue
-
-                  if re.search(r"^\s*namespace\s+", content, re.M):
-                      continue
-
-                  manifest = os.path.join(
-                      root, "src", "main", "AndroidManifest.xml"
-                  )
-
-                  if not os.path.exists(manifest):
-                      continue
-
-                  with open(manifest, "r", encoding="utf-8") as f:
-                      xml = f.read()
-
-                  match = re.search(
-                      r'package=["\']([^"\']+)["\']', xml
-                  )
-
-                  if not match:
-                      continue
-
-                  namespace = match.group(1)
-
-                  content = content.replace(
-                      "android {",
-                      'android {\n    namespace "' + namespace + '"',
-                      1
-                  )
-
-                  with open(path, "w", encoding="utf-8") as f:
-                      f.write(content)
-
-                  print("Added namespace:", namespace)
-
-              except (OSError, UnicodeError) as error:
-                  print("Skipped:", path, error)
-          PY
-
+                  modified = False
+                  if "5.1" in content and "5.1.LTS" not in content:
+                      content = content.replace("ffmpeg-kit-min:5.1", "ffmpeg-kit-min:5.1.LTS")
+                      content = content.replace("\x275.1\x27", "\x275.1.LTS\x27")
+                      content = content.replace("\"5.1\"", "\"5.1.LTS\"")
+                      modified = True
+                  if "android {" in content and "namespace" not in content:
+                      pkg = "xyz.justsoft.video_thumbnail"
+                      mfile = os.path.join(root, "src", "main", "AndroidManifest.xml")
+                      if os.path.exists(mfile):
+                          with open(mfile, "r", encoding="utf-8") as mf:
+                              m = re.search(r"package=[\"\x27]([^\s\"\x27]+)[\"\x27]", mf.read())
+                              if m:
+                                  pkg = m.group(1)
+                      content = content.replace("android {", f"android {{\n    namespace \"{pkg}\"")
+                      modified = True
+                  if modified:
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(content)
+          '
           flutter build apk --debug
 
       - name: Upload APK Artifact
@@ -140,4 +96,3 @@ jobs:
         with:
           name: video-editor-apk
           path: example/build/app/outputs/flutter-apk/*.apk
-          if-no-files-found: error
