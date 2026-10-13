@@ -24,7 +24,7 @@ jobs:
         with:
           flutter-version: '3.19.6'
 
-      - name: Patch and Build APK
+      - name: Patch dependencies and Build APK
         run: |
           cd example
           flutter pub get
@@ -32,7 +32,7 @@ jobs:
           python3 -c '
           import os, re
 
-          # 1. ضبط إعدادات أندرويد
+          # 1. ضبط الحد الأدنى لإصدار أندرويد
           app_gradle = "android/app/build.gradle"
           if os.path.exists(app_gradle):
               with open(app_gradle, "r", encoding="utf-8") as f:
@@ -42,41 +42,38 @@ jobs:
               with open(app_gradle, "w", encoding="utf-8") as f:
                   f.write(c)
 
-          # 2. توجيه Gradle لتحميل نسخة 5.1.LTS الرسمية
+          # 2. إضافة مستودعات بديلة إضافية
           root_gradle = "android/build.gradle"
           if os.path.exists(root_gradle):
               with open(root_gradle, "r", encoding="utf-8") as f:
                   rg = f.read()
-              patch_str = """
-          allprojects {
-              configurations.all {
-                  resolutionStrategy.eachDependency { details ->
-                      if (details.requested.group == "com.arthenica" && details.requested.version == "5.1") {
-                          details.useVersion "5.1.LTS"
+              if "artifactory.appodeal.com" not in rg:
+                  repo_snippet = """
+                  allprojects {
+                      repositories {
+                          maven { url "https://artifactory.appodeal.com/appodeal-public" }
+                          maven { url "https://jitpack.io" }
                       }
                   }
-              }
-          }
-          """
-              if "resolutionStrategy" not in rg:
+                  """
                   with open(root_gradle, "a", encoding="utf-8") as f:
-                      f.write(patch_str)
+                      f.write(repo_snippet)
 
-          # 3. تعديل ملفات المكتبات في الذاكرة المؤقتة
+          # 3. استبدال الحزمة المحذوفة بالحزمة النشطة وإصلاح الـ namespace
           pub_cache = os.path.expanduser("~/.pub-cache")
           for root, dirs, files in os.walk(pub_cache):
               if "build.gradle" in files:
                   path = os.path.join(root, "build.gradle")
                   with open(path, "r", encoding="utf-8") as f:
                       content = f.read()
-                  modified = False
-                  if "5.1" in content and "5.1.LTS" not in content:
-                      content = content.replace("ffmpeg-kit-min:5.1", "ffmpeg-kit-min:5.1.LTS")
-                      content = content.replace("\x275.1\x27", "\x275.1.LTS\x27")
-                      content = content.replace("\"5.1\"", "\"5.1.LTS\"")
-                      modified = True
+                  orig = content
+                  
+                  # استبدال الرابط المحذوف بالنسخة البديلة المتوفرة رسمياً
+                  content = re.sub(r"com\.arthenica:ffmpeg-kit-([a-zA-Z0-9_-]+):[^\s\x27\"]+", r"dev.ffmpegkit-maintained:ffmpeg-kit-\1:8.1.7", content)
+
+                  # ضبط مساحة الأسماء للأندرويد
                   if "android {" in content and "namespace" not in content:
-                      pkg = "xyz.justsoft.video_thumbnail"
+                      pkg = "com.plugin.fixed"
                       mfile = os.path.join(root, "src", "main", "AndroidManifest.xml")
                       if os.path.exists(mfile):
                           with open(mfile, "r", encoding="utf-8") as mf:
@@ -84,8 +81,8 @@ jobs:
                               if m:
                                   pkg = m.group(1)
                       content = content.replace("android {", f"android {{\n    namespace \"{pkg}\"")
-                      modified = True
-                  if modified:
+
+                  if content != orig:
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(content)
           '
