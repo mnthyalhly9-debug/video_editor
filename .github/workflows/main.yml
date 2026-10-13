@@ -24,15 +24,25 @@ jobs:
         with:
           flutter-version: '3.19.6'
 
-      - name: Patch dependencies and Build APK
+      - name: Configure Memory and Build APK
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m"
+          _JAVA_OPTIONS: "-Xmx4096m"
         run: |
           cd example
+          
+          # رفع ذاكرة Gradle إلى 4 جيجابايت ومنع استهلاك الرام
+          mkdir -p android
+          echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m" >> android/gradle.properties
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=false" >> android/gradle.properties
+
           flutter pub get
 
           python3 -c '
           import os, re
 
-          # 1. ضبط الحد الأدنى لإصدار أندرويد
+          # ضبط الحد الأدنى لنظام أندرويد
           app_gradle = "android/app/build.gradle"
           if os.path.exists(app_gradle):
               with open(app_gradle, "r", encoding="utf-8") as f:
@@ -42,7 +52,7 @@ jobs:
               with open(app_gradle, "w", encoding="utf-8") as f:
                   f.write(c)
 
-          # 2. إضافة مستودعات بديلة إضافية
+          # إضافة مستودعات بديلة
           root_gradle = "android/build.gradle"
           if os.path.exists(root_gradle):
               with open(root_gradle, "r", encoding="utf-8") as f:
@@ -59,7 +69,7 @@ jobs:
                   with open(root_gradle, "a", encoding="utf-8") as f:
                       f.write(repo_snippet)
 
-          # 3. استبدال الحزمة المحذوفة بالحزمة النشطة وإصلاح الـ namespace
+          # تعديل الحزمة المحذوفة وضبط الـ namespace
           pub_cache = os.path.expanduser("~/.pub-cache")
           for root, dirs, files in os.walk(pub_cache):
               if "build.gradle" in files:
@@ -67,11 +77,7 @@ jobs:
                   with open(path, "r", encoding="utf-8") as f:
                       content = f.read()
                   orig = content
-                  
-                  # استبدال الرابط المحذوف بالنسخة البديلة المتوفرة رسمياً
                   content = re.sub(r"com\.arthenica:ffmpeg-kit-([a-zA-Z0-9_-]+):[^\s\x27\"]+", r"dev.ffmpegkit-maintained:ffmpeg-kit-\1:8.1.7", content)
-
-                  # ضبط مساحة الأسماء للأندرويد
                   if "android {" in content and "namespace" not in content:
                       pkg = "com.plugin.fixed"
                       mfile = os.path.join(root, "src", "main", "AndroidManifest.xml")
@@ -81,7 +87,6 @@ jobs:
                               if m:
                                   pkg = m.group(1)
                       content = content.replace("android {", f"android {{\n    namespace \"{pkg}\"")
-
                   if content != orig:
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(content)
@@ -93,3 +98,4 @@ jobs:
         with:
           name: video-editor-apk
           path: example/build/app/outputs/flutter-apk/*.apk
+
