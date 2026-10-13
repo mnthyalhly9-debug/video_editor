@@ -24,12 +24,28 @@ jobs:
         with:
           flutter-version: '3.19.6'
 
-      - name: Patch plugins namespace and build APK
+      - name: Update dependencies and Patch
         run: |
           cd example
+          # ترقية المكتبة للإصدار المتوفر على السيرفرات الرسمية
+          flutter pub add ffmpeg_kit_flutter_min:^6.0.3
           flutter pub get
+
+          # معالجة التوافق مع نظام أندرويد
           python3 -c '
           import os, re
+          
+          # رفع الحد الأدنى لنظام أندرويد ليتوافق مع محرك الفيديو
+          app_gradle = "android/app/build.gradle"
+          if os.path.exists(app_gradle):
+              with open(app_gradle, "r", encoding="utf-8") as f:
+                  c = f.read()
+              c = re.sub(r"minSdkVersion\s+\d+", "minSdkVersion 24", c)
+              c = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 24", c)
+              with open(app_gradle, "w", encoding="utf-8") as f:
+                  f.write(c)
+
+          # ضبط مساحات الأسماء للمكتبات القديمة
           pub_cache = os.path.expanduser("~/.pub-cache")
           for root, dirs, files in os.walk(pub_cache):
               if "build.gradle" in files:
@@ -37,7 +53,7 @@ jobs:
                   with open(path, "r", encoding="utf-8") as f:
                       content = f.read()
                   if "android {" in content and "namespace" not in content:
-                      pkg = "com.arthenica.ffmpegkit.flutter"
+                      pkg = "xyz.justsoft.video_thumbnail"
                       mfile = os.path.join(root, "src", "main", "AndroidManifest.xml")
                       if os.path.exists(mfile):
                           with open(mfile, "r", encoding="utf-8") as mf:
@@ -47,7 +63,6 @@ jobs:
                       new_content = content.replace("android {", f"android {{\n    namespace \"{pkg}\"")
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(new_content)
-                      print(f"Patched: {path} with {pkg}")
           '
           flutter build apk --debug
 
