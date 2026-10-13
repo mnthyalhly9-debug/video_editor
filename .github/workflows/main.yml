@@ -24,10 +24,31 @@ jobs:
         with:
           flutter-version: '3.19.6'
 
-      - name: Build APK
+      - name: Patch plugins namespace and build APK
         run: |
           cd example
           flutter pub get
+          python3 -c '
+          import os, re
+          pub_cache = os.path.expanduser("~/.pub-cache")
+          for root, dirs, files in os.walk(pub_cache):
+              if "build.gradle" in files:
+                  path = os.path.join(root, "build.gradle")
+                  with open(path, "r", encoding="utf-8") as f:
+                      content = f.read()
+                  if "android {" in content and "namespace" not in content:
+                      pkg = "com.arthenica.ffmpegkit.flutter"
+                      mfile = os.path.join(root, "src", "main", "AndroidManifest.xml")
+                      if os.path.exists(mfile):
+                          with open(mfile, "r", encoding="utf-8") as mf:
+                              m = re.search(r"package=[\"\x27]([^\s\"\x27]+)[\"\x27]", mf.read())
+                              if m:
+                                  pkg = m.group(1)
+                      new_content = content.replace("android {", f"android {{\n    namespace \"{pkg}\"")
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(new_content)
+                      print(f"Patched: {path} with {pkg}")
+          '
           flutter build apk --debug
 
       - name: Upload APK Artifact
